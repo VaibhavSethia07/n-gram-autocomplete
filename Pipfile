@@ -1,0 +1,13 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+datasets = "==2.19.0"
+nltk = "==3.8.1"
+
+[dev-packages]
+
+[requires]
+python_version = "3.9"
