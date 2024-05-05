@@ -1,4 +1,3 @@
-import random
 import string
 from dataclasses import dataclass, field
 from typing import List
@@ -8,6 +7,7 @@ import pandas as pd
 from datasets import load_dataset
 from nltk.tokenize import word_tokenize
 from nltk.tokenize.punkt import PunktSentenceTokenizer
+import secrets
 
 nltk.download("punkt")
 
@@ -125,9 +125,9 @@ class TrainTestSplit:
     def shuffled(self):
         """Shuffled data"""
         if not self._shuffled:
-            random.seed(self.seed)
+            secrets.SystemRandom().seed(self.seed)
             # Don't use random.shuffle because it is in-place shuffle
-            self._shuffled = random.sample(population=self.data, k=len(self.data))
+            self._shuffled = secrets.SystemRandom().sample(population=self.data, k=len(self.data))
         return self._shuffled
 
     @property
