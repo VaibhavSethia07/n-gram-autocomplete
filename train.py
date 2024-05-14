@@ -1,7 +1,8 @@
 import random
 import string
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import List
+from typing import Dict, List, Set
 
 import nltk
 import pandas as pd
@@ -25,7 +26,14 @@ class Tokenizer:
     source: pd.Series
     _sentences: List[str] = field(default_factory=list)
 
-    def tokenize_text_to_sentences(self, data: pd.Series):
+    @property
+    def sentences(self):
+        """The data split into sentences"""
+        if not self._sentences:
+            self._sentences = self.get_tokenized_data(data=self.source)
+        return self._sentences
+
+    def tokenize_text_to_sentences(self, data: pd.Series) -> List[str]:
         """
         Split data by line break "\n", sentence completion tokens into sentences
         Args:
@@ -43,7 +51,7 @@ class Tokenizer:
 
         return sentences
 
-    def clean_words(self, words: List[str]):
+    def clean_words(self, words: List[str]) -> List[str]:
         """
         Clean the words by removing punctuations, and numeric tokens
             Args:
@@ -64,13 +72,13 @@ class Tokenizer:
             cleaned_words.append(word.lower())
         return cleaned_words
 
-    def tokenize_sentences(self, sentences: List[str]):
+    def tokenize_sentences(self, sentences: List[str]) -> List[List[str]]:
         """
         Tokenize sentences into tokens (words)
         Args:
             sentences List[str]: List of sentences
         Returns:
-            tokenized_sentences List[str]: List of tokenized sentences
+            tokenized_sentences List[List[str]]: List of tokenized sentences
         """
         tokenized_sentences = list()
 
@@ -84,7 +92,7 @@ class Tokenizer:
 
         return tokenized_sentences
 
-    def get_tokenized_data(self, data: pd.Series):
+    def get_tokenized_data(self, data: pd.Series) -> List[List[str]]:
         """
         Make a list of tokenized sentences
         Args:
@@ -96,13 +104,6 @@ class Tokenizer:
         tokens = self.tokenize_sentences(sentences=sentences)
 
         return tokens
-
-    @property
-    def sentences(self):
-        """The data split into sentences"""
-        if not self._sentences:
-            self._sentences = self.get_tokenized_data(data=self.source)
-        return self._sentences
 
 
 @dataclass
@@ -152,6 +153,100 @@ class TrainTestSplit:
         return self._testing
 
 
+@dataclass
+class CountProcessor:
+    """Processes the data to have unknowns
+        Args:
+            training List[List[str]]: List of tokenized training sentences
+            testing List[List[str]]: List of tokenized testing sentences
+            threshold int: Minimum number of occurences for a word to be in closed vocabulary
+            unknown_token str: Unknown token
+    """
+    training: List[List[str]]
+    testing: List[List[str]]
+    threshold: int = 2
+    unknown_token: str = "<unk>"
+    _vocabulary: Dict[str, int] = field(default_factory=dict)
+    _closed_vocabulary_set: Set[str] = field(default_factory=set)
+    _training_data_unknowns: List[List[str]] = field(default_factory=list)
+    _testing_data_unknowns: List[List[str]] = field(default_factory=list)
+
+    @property
+    def vocabulary(self):
+        """The tokens in the training set and their frequency"""
+        if not self._vocabulary:
+            self._vocabulary = self.create_vocabulary()
+        return self._vocabulary
+
+    @property
+    def closed_vocabulary(self):
+        """The tokens in the training set that appear more than the `threshold` times"""
+        if not self._closed_vocabulary_set:
+            self._closed_vocabulary_set = self.create_closed_vocabulary_set()
+        return self._closed_vocabulary_set
+
+    @property
+    def training_data_unknowns(self):
+        """Training data with words below threshold replaced with `unknown_token`"""
+        if not self._training_data_unknowns:
+            self._training_data_unknowns = self.replace_oov_words_by_unknown_token(self.training)
+        return self._training_data_unknowns
+
+    @property
+    def testing_data_unknowns(self):
+        """Testing data with words below threshold replaced with `unknown_token`"""
+        if not self._testing_data_unknowns:
+            self._testing_data_unknowns = self.replace_oov_words_by_unknown_token(self.testing)
+        return self._testing_data_unknowns
+
+    def create_vocabulary(self) -> Dict[str, int]:
+        """
+        Count the number of word appearances in tokenized sentences
+            Returns:
+                vocabulary Dict[str, int]: Dictionary that maps word(str) to its frequency(int)
+        """
+        vocabulary = defaultdict(int)
+        for sentence in self.training:
+            for word in sentence:
+                vocabulary[word] += 1
+
+        return dict(vocabulary)
+
+    def create_closed_vocabulary_set(self) -> Dict[str, int]:
+        """
+        Find the words that appear more than the threshold frequency
+        Returns:
+            closed_vocabulary Set[str]: Set of words that appear `threshold` or more times
+        """
+        closed_vocabulary = set()
+        for word, freq in self.vocabulary.items():
+            if freq >= self.threshold:
+                closed_vocabulary.add(word)
+        return closed_vocabulary
+
+    def replace_oov_words_by_unknown_token(self, sentences: List[List[str]]) -> List[List[str]]:
+        """
+        Replace words not in the given vocabulary with '<unk>' token.
+        Args:
+            sentences List[List[str]]: List of word tokenized sentences
+        Returns:
+            replaced_tokenized_sentences List[List[str]]:  List of word tokenized sentences with out-of-vocabulary words converted to `unknown_token`
+        """
+        replaced_tokenized_sentences = list()
+
+        for sentence in sentences:
+            replaced_sentence = list()
+            for word in sentence:
+                if word not in self._closed_vocabulary_set:
+                    replaced_sentence.append(self.unknown_token)
+                else:
+                    replaced_sentence.append(word)
+
+            replaced_tokenized_sentences.append(replaced_sentence)
+
+        return replaced_tokenized_sentences
+
+
 if __name__ == "__main__":
     tokenizer = Tokenizer(source=df["instruction_output"].head())
     print(len(tokenizer.sentences))
@@ -160,3 +255,8 @@ if __name__ == "__main__":
     print(splitter.split)
     print(len(splitter.training))
     print(len(splitter.testing))
+    processor = CountProcessor(training=splitter.training, testing=splitter.testing)
+    print(processor.vocabulary)
+    print(processor.closed_vocabulary)
+    print(processor.training_data_unknowns)
+    print(processor.testing_data_unknowns)
