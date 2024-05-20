@@ -1,8 +1,9 @@
 import random
 import string
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Set
+from itertools import chain
+from typing import Dict, List, Set, Tuple
 
 import nltk
 import pandas as pd
@@ -215,8 +216,8 @@ class CountProcessor:
     def create_closed_vocabulary_set(self) -> Dict[str, int]:
         """
         Find the words that appear more than the threshold frequency
-        Returns:
-            closed_vocabulary Set[str]: Set of words that appear `threshold` or more times
+            Returns:
+                closed_vocabulary Set[str]: Set of words that appear `threshold` or more times
         """
         closed_vocabulary = set()
         for word, freq in self.vocabulary.items():
@@ -227,10 +228,10 @@ class CountProcessor:
     def replace_oov_words_by_unknown_token(self, sentences: List[List[str]]) -> List[List[str]]:
         """
         Replace words not in the given vocabulary with '<unk>' token.
-        Args:
-            sentences List[List[str]]: List of word tokenized sentences
-        Returns:
-            replaced_tokenized_sentences List[List[str]]:  List of word tokenized sentences with out-of-vocabulary words converted to `unknown_token`
+            Args:
+                sentences List[List[str]]: List of word tokenized sentences
+            Returns:
+                replaced_tokenized_sentences List[List[str]]:  List of word tokenized sentences with out-of-vocabulary words converted to `unknown_token`
         """
         replaced_tokenized_sentences = list()
 
@@ -247,6 +248,68 @@ class CountProcessor:
         return replaced_tokenized_sentences
 
 
+@dataclass
+class NGrams:
+    """
+    The N-Gram Language Model
+        Args:
+            data List[List[str]]: List of tokenized sentences
+            n int: Number of words in the N-Gram
+            start_token str: Start of sentence token
+            end_token str: End of sentence token
+    """
+    data: List[List[str]]
+    n: int
+    start_token: str = "<s>"
+    end_token: str = "<e>"
+    _start_tokens: List[str] = field(default_factory=list)
+    _end_tokens: List[str] = field(default_factory=list)
+    _sentences: List[List[str]] = field(default_factory=list)
+    _n_grams: List[List[str]] = field(default_factory=list)
+    _n_gram_counts: Dict[Tuple[str], int] = field(default_factory=Counter)
+
+    @property
+    def start_tokens(self):
+        """List of `n` start tokens"""
+        if not self._start_tokens:
+            self._start_tokens = [self.start_token]*self.n
+        return self._start_tokens
+
+    @property
+    def end_tokens(self):
+        """Lis of 1 end tokens"""
+        if not self._end_tokens:
+            self._end_tokens = [self.end_token]
+        return self._end_tokens
+
+    @property
+    def sentences(self):
+        """The data augmented with start and end tokens and converted to tuples"""
+        if not self._sentences:
+            self._sentences = [tuple(self.start_tokens + sentence + self.end_tokens) for sentence in self.data]
+        return self._sentences
+
+    @property
+    def n_grams(self):
+        """The n-grams from the data
+        Warning:This method flattens the n-grams so there isn't any sentence structure
+        """
+        if not self._n_grams:
+            self._n_grams = chain.from_iterable([
+                [sentence[cut:cut+self.n] for cut in range(0, len(sentence) - self.n + 1)]
+                for sentence in self.sentences])
+        return self._n_grams
+
+    @property
+    def n_gram_counts(self) -> Counter:
+        """Count of all n-grams in the data
+        Returns: A dictionary that maps a tuple of n-words to its frequency
+        """
+        if not self._n_gram_counts:
+            self._n_gram_counts = Counter(self.n_grams)
+        return self._n_gram_counts
+
+
 if __name__ == "__main__":
     tokenizer = Tokenizer(source=df["instruction_output"].head())
     print(len(tokenizer.sentences))
@@ -260,3 +323,7 @@ if __name__ == "__main__":
     print(processor.closed_vocabulary)
     print(processor.training_data_unknowns)
     print(processor.testing_data_unknowns)
+
+    n_gram = NGrams(data=processor.training_data_unknowns, n=2)
+    print(n_gram.n_grams)
+    print(n_gram.n_gram_counts)
