@@ -1,13 +1,15 @@
+import math
 import random
 import string
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from itertools import chain
-from typing import Dict, List, Set, Tuple
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 import nltk
 import pandas as pd
 from datasets import load_dataset
+from expects import be_true, expect, have_keys
 from nltk.tokenize import word_tokenize
 from nltk.tokenize.punkt import PunktSentenceTokenizer
 
@@ -254,7 +256,7 @@ class NGrams:
     The N-Gram Language Model
         Args:
             data List[List[str]]: List of tokenized sentences
-            n int: Number of words in the N-Gram
+            n int: Size of the N-Gram
             start_token str: Start of sentence token
             end_token str: End of sentence token
     """
@@ -266,7 +268,7 @@ class NGrams:
     _end_tokens: List[str] = field(default_factory=list)
     _sentences: List[List[str]] = field(default_factory=list)
     _n_grams: List[List[str]] = field(default_factory=list)
-    _n_gram_counts: Dict[Tuple[str], int] = field(default_factory=Counter)
+    _counts: Dict[Tuple[str], int] = field(default_factory=Counter)
 
     @property
     def start_tokens(self):
@@ -277,7 +279,7 @@ class NGrams:
 
     @property
     def end_tokens(self):
-        """Lis of 1 end tokens"""
+        """List of 1 end tokens"""
         if not self._end_tokens:
             self._end_tokens = [self.end_token]
         return self._end_tokens
@@ -290,7 +292,7 @@ class NGrams:
         return self._sentences
 
     @property
-    def n_grams(self):
+    def n_grams(self) -> List[str]:
         """The n-grams from the data
         Warning:This method flattens the n-grams so there isn't any sentence structure
         """
@@ -301,13 +303,98 @@ class NGrams:
         return self._n_grams
 
     @property
-    def n_gram_counts(self) -> Counter:
+    def counts(self) -> Counter:
         """Count of all n-grams in the data
         Returns: A dictionary that maps a tuple of n-words to its frequency
         """
-        if not self._n_gram_counts:
-            self._n_gram_counts = Counter(self.n_grams)
-        return self._n_gram_counts
+        if not self._counts:
+            self._counts = Counter(self.n_grams)
+        return self._counts
+
+
+@dataclass
+class NGramProbability:
+    """
+    Probability model for n-grams
+    Args:
+        data List[List[str]]: The source for the n-grams
+        n int: Size of the N-Gram
+        k float: Smoothing parameter. Positive constant
+        augment_vocabulary bool: Hack because the two probability functions use different vocabularies
+        end_token str: End of sentence token
+        unknown_token str: Unknown token
+    """
+    data: List[List[str]]
+    n: int
+    k: float = 1.0
+    augment_vocabulary: bool = True
+    end_token: str = "<e>"
+    unknown_token: str = "<unk>"
+    _n_grams: Optional[NGrams] = None
+    _n_plus1_grams: Optional[NGrams] = None
+    _vocabulary: Optional[FrozenSet] = None
+    _vocabulary_size: Optional[int] = 0
+    _probabilities: Optional[Dict[str, float]] = field(default_factory=dict)
+
+    @property
+    def n_grams(self) -> NGrams:
+        if not self._n_grams:
+            self._n_grams = NGrams(data=self.data, n=self.n)
+        return self._n_grams
+
+    @property
+    def n_plus1_grams(self) -> NGrams:
+        if not self._n_plus1_grams:
+            self._n_plus1_grams = NGrams(data=self.data, n=self.n+1)
+        return self._n_plus1_grams
+
+    @property
+    def vocabulary(self) -> FrozenSet:
+        """Unique words in the dictionary"""
+        if not self._vocabulary:
+            data = list(chain.from_iterable(self.data)).copy()
+            if self.augment_vocabulary:
+                data.extend([self.end_token, self.unknown_token])
+            self._vocabulary = frozenset(data)
+        return self._vocabulary
+
+    @property
+    def vocabulary_size(self) -> int:
+        """Number of unique tokens in the data"""
+        if not self._vocabulary_size:
+            self._vocabulary_size = len(self.vocabulary)
+        return self._vocabulary_size
+
+    def probability(self, word: str, previous_n_gram: Tuple[str]) -> float:
+        """
+        Calculates the probabiltiy of the word, given the previous n-gram
+            Args: 
+                word str: next probable word after `previous_n_gram`
+                previous_n_gram Tuple[str]: Sequence of words of length `n`
+            Returns:
+                probability float: probability of the word after `previous_n_gram`
+        """
+
+        previous_n_gram = tuple(previous_n_gram)
+        previous_n_gram_count = self.n_grams.counts.get(previous_n_gram, 0)
+        denominator = previous_n_gram_count + self.k * self.vocabulary_size
+
+        n_plus1_gram = previous_n_gram + (word,)
+        n_plus1_gram_count = self.n_plus1_grams.counts.get(n_plus1_gram, 0)
+        numerator = n_plus1_gram_count + self.k
+
+        probability = numerator/denominator
+        return probability
+
+    def probabilities(self, previous_n_gram: Tuple[str]) -> Dict[str, float]:
+        """
+        Finds the probability of each word in the vocabulary
+        Args:
+            previous_n_gram Tuple[str]: Sequence of words of length `n`
+        Returns:
+            {word: <probability of word following `previous_n_gram` for the vocabulary}
+        """
+        return {word: self.probability(word=word, previous_n_gram=previous_n_gram) for word in self.vocabulary}
 
 
 if __name__ == "__main__":
@@ -324,6 +411,47 @@ if __name__ == "__main__":
     print(processor.training_data_unknowns)
     print(processor.testing_data_unknowns)
 
-    n_gram = NGrams(data=processor.training_data_unknowns, n=2)
-    print(n_gram.n_grams)
-    print(n_gram.n_gram_counts)
+    sentences = [["i", "like", "a", "cat"],
+                 ["this", "dog", "is", "like", "a", "cat"]]
+    # *** Unigram ***
+    expected = {('<s>',): 2, ('i',): 1, ('like',): 2, ('a',): 2, ('cat',): 2,
+                ('<e>',): 2, ('this',): 1, ('dog',): 1, ('is',): 1}
+
+    uni_grams = NGrams(data=sentences, n=1)
+    print(uni_grams.n_grams)
+    print(uni_grams.counts)
+    expect(uni_grams.counts).to(have_keys(expected))
+
+    # *** Bigram ***
+    expected = {('<s>', '<s>'): 2, ('<s>', 'i'): 1, ('i', 'like'): 1,
+                ('like', 'a'): 2, ('a', 'cat'): 2, ('cat', '<e>'): 2,
+                ('<s>', 'this'): 1, ('this', 'dog'): 1, ('dog', 'is'): 1,
+                ('is', 'like'): 1}
+    bi_grams = NGrams(data=sentences, n=2)
+    print(bi_grams.n_grams)
+    print(bi_grams.counts)
+    expect(bi_grams.counts).to(have_keys(expected))
+
+    model = NGramProbability(data=sentences, n=1, augment_vocabulary=False)
+
+    actual = model.probability("cat", ("a",))
+    expected = 0.3333
+    print(f"The estimated probability of word 'cat' given previous n-gram 'a' is {actual:.4f}")
+    expect(math.isclose(actual, expected, abs_tol=1e-4)).to(be_true)
+
+    # Probabilities test examples assuming you did augment the vocabulary
+    model = NGramProbability(data=sentences, n=1)
+    actual = model.probabilities(("a",))
+    expected = {'cat': 0.2727272727272727, 'i': 0.09090909090909091, 'like': 0.09090909090909091,
+                'dog': 0.09090909090909091, 'is': 0.09090909090909091, 'this': 0.09090909090909091,
+                '<unk>': 0.09090909090909091, 'a': 0.09090909090909091, '<e>': 0.09090909090909091}
+    print(actual)
+    expect(actual).to(have_keys(expected))
+
+    model = NGramProbability(data=sentences, n=2)
+    actual = model.probabilities(("<s>", "<s>"))
+    expected = {'this': 0.18181818181818182, 'like': 0.09090909090909091, '<unk>': 0.09090909090909091,
+                'a': 0.09090909090909091, 'dog': 0.09090909090909091, 'cat': 0.09090909090909091,
+                'i': 0.18181818181818182, 'is': 0.09090909090909091, '<e>': 0.09090909090909091}
+    print(actual)
+    expect(actual).to(have_keys(expected))
