@@ -397,6 +397,45 @@ class NGramProbability:
         return {word: self.probability(word=word, previous_n_gram=previous_n_gram) for word in self.vocabulary}
 
 
+@dataclass
+class Perplexity:
+    """
+    Calculate perplexity
+        Args:
+            data List[List[str]]: Tokenized training input
+            n int: Size of the n-grams
+            augment_vocabulary bool: Whether to augment the vocabulary for toy examples 
+    """
+    data: List[List[str]]
+    n: int
+    augment_vocabulary: bool
+    _probablifier: Optional[NGramProbability] = None
+
+    @property
+    def probabilifier(self):
+        """Probability Calculator"""
+        if not self._probablifier:
+            self._probablifier = NGramProbability(data=self.data,
+                                                  n=self.n,
+                                                  augment_vocabulary=self.augment_vocabulary)
+        return self._probablifier
+
+    def perplexity(self, sentence: List[str]) -> float:
+        """Calculates the perplexity of a sentence"""
+        sentence = tuple(["<s>"]*self.n + sentence + ["<e>"])
+        N = len(sentence)
+
+        n_grams = (sentence[position-self.n:position] for position in range(self.n, N))
+
+        words = (sentence[position] for position in range(self.n, N))
+
+        words_n_grams = zip(words, n_grams)
+        probabilities = (self.probabilifier.probability(word, n_gram) for word, n_gram in words_n_grams)
+
+        product = math.prod((1/probability for probability in probabilities))
+        return product**(1/N)
+
+
 if __name__ == "__main__":
     tokenizer = Tokenizer(source=df["instruction_output"].head())
     print(len(tokenizer.sentences))
@@ -455,3 +494,19 @@ if __name__ == "__main__":
                 'i': 0.18181818181818182, 'is': 0.09090909090909091, '<e>': 0.09090909090909091}
     print(actual)
     expect(actual).to(have_keys(expected))
+
+    sentences = [["i", "like", "a", "cat"],
+                 ["this", "dog", "is", "like", "a", "cat"]]
+
+    model = Perplexity(data=sentences, n=1, augment_vocabulary=False)
+
+    expected = 2.8040
+    actual = model.perplexity(sentence=sentences[0])
+    print(f"Perplexity for the first train sample: {actual:.4f}")
+    expect(math.isclose(actual, expected, abs_tol=1e-4)).to(be_true)
+
+    test_sentence = ["i", "like", "a", "dog"]
+    expected = 3.9654
+    actual = model.perplexity(sentence=test_sentence)
+    print(f"Perplexity for the test sample: {actual:.4f}")
+    expect(math.isclose(actual, expected, abs_tol=1e-4)).to(be_true)
