@@ -9,7 +9,6 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 import nltk
 import pandas as pd
 from datasets import load_dataset
-from expects import be_true, expect, have_keys
 from nltk.tokenize import word_tokenize
 from nltk.tokenize.punkt import PunktSentenceTokenizer
 
@@ -119,7 +118,7 @@ class TrainTestSplit:
     """
     data: List[List[str]]
     seed: int = 7
-    training_fraction: float = 0.8
+    training_fraction: float = 1
     _shuffled: List[List[str]] = field(default_factory=list)
     _training: List[List[str]] = field(default_factory=list)
     _testing: List[List[str]] = field(default_factory=list)
@@ -145,14 +144,14 @@ class TrainTestSplit:
     def training(self):
         """Training set"""
         if not self._training:
-            self._training = self._shuffled[0:self._split]
+            self._training = self.shuffled[0:self.split]
         return self._training
 
     @property
     def testing(self):
         """Testing set"""
         if not self._testing:
-            self._testing = self._shuffled[self._split:]
+            self._testing = self.shuffled[self.split:]
         return self._testing
 
 
@@ -240,7 +239,7 @@ class CountProcessor:
         for sentence in sentences:
             replaced_sentence = list()
             for word in sentence:
-                if word not in self._closed_vocabulary_set:
+                if word not in self.closed_vocabulary:
                     replaced_sentence.append(self.unknown_token)
                 else:
                     replaced_sentence.append(word)
@@ -436,77 +435,184 @@ class Perplexity:
         return product**(1/N)
 
 
+@dataclass
+class WordSuggester:
+    # TODO: Add a docstring for this class
+    """
+
+    """
+    data: List[List[str]]
+    n: int
+    _probablifier: Optional[NGramProbability] = None
+
+    @property
+    def probablifier(self):
+        """Probability Calculator"""
+        if not self._probablifier:
+            self._probablifier = NGramProbability(data=self.data,
+                                                  n=self.n)
+        return self._probablifier
+
+    def suggest_a_word(self,
+                       previous_tokens: List[str],
+                       start_with: Optional[str] = None):
+        """
+        Get suggestion for the next word
+        Args:
+            previous_tokens List[str]: Input sentence where each token is a word. 
+            Sentence must have length > n
+            start_with: If not None, specifies the first few letters of the next word
+        Returns:
+        """
+
+        # Get the most recent `n` words as the previous n-gram from the words
+        # that the user already typed
+        previous_n_gram = previous_tokens[-self.n:]
+
+        # Estimate the probabilities that each word in the vocabulary is the next word
+        probabilities = self.probablifier.probabilities(previous_n_gram=previous_n_gram)
+
+        # Suggestion will be set to the word with highest probability
+        suggestion = None
+        max_probability = 0
+
+        for word, probability in probabilities.items():
+            if start_with is not None and not word.startswith(start_with):
+                continue
+
+            # Check if this word's probability is greater than the current maximum probability
+            if probability > max_probability:
+                suggestion = word
+                max_probability = probability
+
+        return suggestion, max_probability
+
+
+def get_suggestions(sentences: List[List[str]],
+                    previous_tokens: List[str],
+                    model_counts: int = 5,
+                    start_with: Optional[str] = None) -> Set[Tuple[str, float]]:
+
+    models = [WordSuggester(data=sentences, n=i) for i in range(1, model_counts+1)]
+    suggestions = set()
+
+    for i in range(model_counts):
+        suggestion = models[i].suggest_a_word(previous_tokens=previous_tokens, start_with=start_with)
+        suggestions.add(suggestion)
+
+    return suggestions
+
+
 if __name__ == "__main__":
-    tokenizer = Tokenizer(source=df["instruction_output"].head())
-    print(len(tokenizer.sentences))
+    # tokenizer = Tokenizer(source=df["instruction_output"].head())
+    # print(len(tokenizer.sentences))
+    # splitter = TrainTestSplit(data=tokenizer.sentences)
+    # print(splitter.shuffled)
+    # print(splitter.split)
+    # print(len(splitter.training))
+    # print(len(splitter.testing))
+    # processor = CountProcessor(training=splitter.training, testing=splitter.testing)
+    # print(processor.vocabulary)
+    # print(processor.closed_vocabulary)
+    # print(processor.training_data_unknowns)
+    # print(processor.testing_data_unknowns)
+
+    # sentences = [["i", "like", "a", "cat"],
+    #              ["this", "dog", "is", "like", "a", "cat"]]
+    # # *** Unigram ***
+    # expected = {('<s>',): 2, ('i',): 1, ('like',): 2, ('a',): 2, ('cat',): 2,
+    #             ('<e>',): 2, ('this',): 1, ('dog',): 1, ('is',): 1}
+
+    # uni_grams = NGrams(data=sentences, n=1)
+    # print(uni_grams.n_grams)
+    # print(uni_grams.counts)
+    # expect(uni_grams.counts).to(have_keys(expected))
+
+    # # *** Bigram ***
+    # expected = {('<s>', '<s>'): 2, ('<s>', 'i'): 1, ('i', 'like'): 1,
+    #             ('like', 'a'): 2, ('a', 'cat'): 2, ('cat', '<e>'): 2,
+    #             ('<s>', 'this'): 1, ('this', 'dog'): 1, ('dog', 'is'): 1,
+    #             ('is', 'like'): 1}
+    # bi_grams = NGrams(data=sentences, n=2)
+    # print(bi_grams.n_grams)
+    # print(bi_grams.counts)
+    # expect(bi_grams.counts).to(have_keys(expected))
+
+    # model = NGramProbability(data=sentences, n=1, augment_vocabulary=False)
+
+    # actual = model.probability("cat", ("a",))
+    # expected = 0.3333
+    # print(f"The estimated probability of word 'cat' given previous n-gram 'a' is {actual:.4f}")
+    # expect(math.isclose(actual, expected, abs_tol=1e-4)).to(be_true)
+
+    # # Probabilities test examples assuming you did augment the vocabulary
+    # model = NGramProbability(data=sentences, n=1)
+    # actual = model.probabilities(("a",))
+    # expected = {'cat': 0.2727272727272727, 'i': 0.09090909090909091, 'like': 0.09090909090909091,
+    #             'dog': 0.09090909090909091, 'is': 0.09090909090909091, 'this': 0.09090909090909091,
+    #             '<unk>': 0.09090909090909091, 'a': 0.09090909090909091, '<e>': 0.09090909090909091}
+    # print(actual)
+    # expect(actual).to(have_keys(expected))
+
+    # model = NGramProbability(data=sentences, n=2)
+    # actual = model.probabilities(("<s>", "<s>"))
+    # expected = {'this': 0.18181818181818182, 'like': 0.09090909090909091, '<unk>': 0.09090909090909091,
+    #             'a': 0.09090909090909091, 'dog': 0.09090909090909091, 'cat': 0.09090909090909091,
+    #             'i': 0.18181818181818182, 'is': 0.09090909090909091, '<e>': 0.09090909090909091}
+    # print(actual)
+    # expect(actual).to(have_keys(expected))
+
+    # sentences = [["i", "like", "a", "cat"],
+    #              ["this", "dog", "is", "like", "a", "cat"]]
+
+    # model = Perplexity(data=sentences, n=1, augment_vocabulary=False)
+
+    # expected = 2.8040
+    # actual = model.perplexity(sentence=sentences[0])
+    # print(f"Perplexity for the first train sample: {actual:.4f}")
+    # expect(math.isclose(actual, expected, abs_tol=1e-4)).to(be_true)
+
+    # test_sentence = ["i", "like", "a", "dog"]
+    # expected = 3.9654
+    # actual = model.perplexity(sentence=test_sentence)
+    # print(f"Perplexity for the test sample: {actual:.4f}")
+    # expect(math.isclose(actual, expected, abs_tol=1e-4)).to(be_true)
+
+    # # Suggest a word
+    # word_suggestor = WordSuggester(data=sentences, n=1)
+    # previous_tokens = ["i", "like"]
+    # suggestion, probability = word_suggestor.suggest_a_word(previous_tokens=previous_tokens)
+
+    # print(f"The previous words are {previous_tokens} and the suggested word is {suggestion} "
+    #       f"with a probability of {probability:.4f}")
+    # expected_word, expected_probability = "a", 0.2727
+    # expect(suggestion).to(equal(expected_word))
+    # expect(math.isclose(probability, expected_probability, abs_tol=1e-4)).to(be_true)
+
+    # # Test when setting the start_with
+    # tmp_starts_with = "c"
+    # suggestion, probability = word_suggestor.suggest_a_word(previous_tokens=previous_tokens, start_with=tmp_starts_with)
+    # print(f"The previous words are {previous_tokens}, the suggestion must start with {tmp_starts_with} "
+    #       f"and the suggested word is {suggestion} with a probability of {probability:.4f}")
+    # expected_word, expected_probability = "cat", 0.0909
+    # expect(suggestion).to(equal(expected_word))
+    # expect(math.isclose(probability, expected_probability, abs_tol=1e-4)).to(be_true)
+
+    # # Multiple suggestions
+    # suggestions = get_suggestions(sentences=sentences, previous_tokens=previous_tokens)
+    # print(f"The previous words are {previous_tokens}, the suggestions are:")
+    # print(suggestions)
+
+    # Multiple Word Suggestions
+    tokenizer = Tokenizer(source=df["instruction_output"])
+    print("tokenizer sentences")
+    print(tokenizer.sentences[:20])
     splitter = TrainTestSplit(data=tokenizer.sentences)
-    print(splitter.shuffled)
-    print(splitter.split)
-    print(len(splitter.training))
-    print(len(splitter.testing))
     processor = CountProcessor(training=splitter.training, testing=splitter.testing)
-    print(processor.vocabulary)
-    print(processor.closed_vocabulary)
-    print(processor.training_data_unknowns)
-    print(processor.testing_data_unknowns)
+    processed_train_data = processor.training_data_unknowns
+    print("processed_train_data")
+    print(processed_train_data[:20])
 
-    sentences = [["i", "like", "a", "cat"],
-                 ["this", "dog", "is", "like", "a", "cat"]]
-    # *** Unigram ***
-    expected = {('<s>',): 2, ('i',): 1, ('like',): 2, ('a',): 2, ('cat',): 2,
-                ('<e>',): 2, ('this',): 1, ('dog',): 1, ('is',): 1}
-
-    uni_grams = NGrams(data=sentences, n=1)
-    print(uni_grams.n_grams)
-    print(uni_grams.counts)
-    expect(uni_grams.counts).to(have_keys(expected))
-
-    # *** Bigram ***
-    expected = {('<s>', '<s>'): 2, ('<s>', 'i'): 1, ('i', 'like'): 1,
-                ('like', 'a'): 2, ('a', 'cat'): 2, ('cat', '<e>'): 2,
-                ('<s>', 'this'): 1, ('this', 'dog'): 1, ('dog', 'is'): 1,
-                ('is', 'like'): 1}
-    bi_grams = NGrams(data=sentences, n=2)
-    print(bi_grams.n_grams)
-    print(bi_grams.counts)
-    expect(bi_grams.counts).to(have_keys(expected))
-
-    model = NGramProbability(data=sentences, n=1, augment_vocabulary=False)
-
-    actual = model.probability("cat", ("a",))
-    expected = 0.3333
-    print(f"The estimated probability of word 'cat' given previous n-gram 'a' is {actual:.4f}")
-    expect(math.isclose(actual, expected, abs_tol=1e-4)).to(be_true)
-
-    # Probabilities test examples assuming you did augment the vocabulary
-    model = NGramProbability(data=sentences, n=1)
-    actual = model.probabilities(("a",))
-    expected = {'cat': 0.2727272727272727, 'i': 0.09090909090909091, 'like': 0.09090909090909091,
-                'dog': 0.09090909090909091, 'is': 0.09090909090909091, 'this': 0.09090909090909091,
-                '<unk>': 0.09090909090909091, 'a': 0.09090909090909091, '<e>': 0.09090909090909091}
-    print(actual)
-    expect(actual).to(have_keys(expected))
-
-    model = NGramProbability(data=sentences, n=2)
-    actual = model.probabilities(("<s>", "<s>"))
-    expected = {'this': 0.18181818181818182, 'like': 0.09090909090909091, '<unk>': 0.09090909090909091,
-                'a': 0.09090909090909091, 'dog': 0.09090909090909091, 'cat': 0.09090909090909091,
-                'i': 0.18181818181818182, 'is': 0.09090909090909091, '<e>': 0.09090909090909091}
-    print(actual)
-    expect(actual).to(have_keys(expected))
-
-    sentences = [["i", "like", "a", "cat"],
-                 ["this", "dog", "is", "like", "a", "cat"]]
-
-    model = Perplexity(data=sentences, n=1, augment_vocabulary=False)
-
-    expected = 2.8040
-    actual = model.perplexity(sentence=sentences[0])
-    print(f"Perplexity for the first train sample: {actual:.4f}")
-    expect(math.isclose(actual, expected, abs_tol=1e-4)).to(be_true)
-
-    test_sentence = ["i", "like", "a", "dog"]
-    expected = 3.9654
-    actual = model.perplexity(sentence=test_sentence)
-    print(f"Perplexity for the test sample: {actual:.4f}")
-    expect(math.isclose(actual, expected, abs_tol=1e-4)).to(be_true)
+    print(get_suggestions(sentences=processed_train_data,
+          previous_tokens=['in', 'this', 'post', 'we', 'will', 'discuss', 'two', 'n-gram', 'based', 'approaches'],
+                          model_counts=5))
